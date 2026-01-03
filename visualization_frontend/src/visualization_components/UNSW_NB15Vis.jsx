@@ -42,18 +42,27 @@ const UNSWVisualization = () => {
   const [colorMode, setColorMode] = useState('attack');
   const [error, setError] = useState(null);
   const [showConfig, setShowConfig] = useState(true);
+  const [availableFeatures, setAvailableFeatures] = useState([]);
+  
   // State for config
   const [config, setConfig] = useState({
     maxRows: 30000,
     numSourceNodes: 500,
     numDestNodes: 500,
-    groupingStrategy: 'modulo'
+    groupingStrategy: 'modulo',
+    nodeSizeFeature: 'packets_total',
+    edgeThicknessFeature: 'rate',
+    edgeOpacityFeature: 'dur',
+    filterMinPackets: 0,
+    filterMinBytes: 0,
+    showOnlyAttacks: false
   });
   
   // State for pan/zoom
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [featureStats, setFeatureStats] = useState({});
 
   useEffect(() => {
     if (!loading && graphData.nodes.length > 0) {
@@ -65,6 +74,14 @@ const UNSWVisualization = () => {
     setShowConfig(false);
     loadAndProcessData();
   };
+
+  const numericFeatures = [
+    'dur', 'spkts', 'dpkts', 'sbytes', 'dbytes', 'rate', 'sttl', 'dttl',
+    'sload', 'dload', 'sloss', 'dloss', 'sinpkt', 'dinpkt', 'sjit', 'djit',
+    'packets_total', 'bytes_total', 'avg_packet_size', 'packet_ratio',
+    'byte_ratio', 'total_loss', 'loss_rate', 'avg_jitter', 'window_size_avg',
+    'tcp_handshake_time', 'response_body_len'
+  ];
 
   const loadAndProcessData = async () => {
     try {
@@ -85,8 +102,15 @@ const UNSWVisualization = () => {
       
       const lines = csvText.split('\n');
       const headers = lines[0].split(',').map(h => h.trim());
+      setAvailableFeatures(headers);
+      
       const nodeMap = new Map();
       const edgesList = [];
+      const stats = {};
+      
+      numericFeatures.forEach(f => {
+        stats[f] = { min: Infinity, max: -Infinity, sum: 0, count: 0 };
+      });
       
       const rowsToProcess = Math.min(config.maxRows, lines.length - 1);
       
@@ -104,6 +128,14 @@ const UNSWVisualization = () => {
         headers.forEach((header, idx) => {
           row[header] = values[idx];
         });
+        
+        const packets = parseFloat(row['packets_total']) || 0;
+        const bytes = parseFloat(row['bytes_total']) || 0;
+        const isAttack = parseInt(row['is_attack']) === 1;
+        
+        if (packets < config.filterMinPackets) continue;
+        if (bytes < config.filterMinBytes) continue;
+        if (config.showOnlyAttacks && !isAttack) continue;
         
         const service = row['service_grouped'] || 'other';
         const proto = row['protocol_category'] || row['proto'] || 'other';
@@ -123,33 +155,46 @@ const UNSWVisualization = () => {
           destId = `dest_${service}_${i % Math.floor(config.numDestNodes / 7)}`
         }
         
-        const isAttack = parseInt(row['is_attack']) === 1;
         const attackGroup = row['attack_group'] || 'Normal';
-        const packets = parseInt(row['packets_total']) || parseInt(row['spkts']) + parseInt(row['dpkts']) || 0;
-        const bytes = parseInt(row['bytes_total']) || parseInt(row['sbytes']) + parseInt(row['dbytes']) || 0;
         const duration = parseFloat(row['dur']) || 0;
         const rate = parseFloat(row['rate']) || 0;
+        
+        const rowFeatures = {};
+        numericFeatures.forEach(feat => {
+          const val = parseFloat(row[feat]) || 0;
+          rowFeatures[feat] = val;
+          stats[feat].min = Math.min(stats[feat].min, val);
+          stats[feat].max = Math.max(stats[feat].max, val);
+          stats[feat].sum += val;
+          stats[feat].count += 1;
+        });
         
         // Create and update our source nodes
         if(!nodeMap.has(sourceId)) {
           nodeMap.set(sourceId, {
             id: sourceId,
             type: 'source',
-            packets: 0,
-            bytes: 0,
             connections: 0,
             isAttack: false,
             attackGroup: 'Normal',
             service: service,
             proto: proto,
-            scannerActivity: 0
-          })
+            scannerActivity: 0,
+            features: {}
+          });
+          
+          numericFeatures.forEach(f => {
+            nodeMap.get(sourceId).features[f] = 0;
+          });
         }
         
         const sourceNode = nodeMap.get(sourceId);
-        sourceNode.packets += packets;
-        sourceNode.bytes += bytes;
         sourceNode.connections += 1;
+        
+        numericFeatures.forEach(f => {
+          sourceNode.features[f] += rowFeatures[f];
+        });
+        
         if(isAttack) {
           sourceNode.isAttack = true;
           sourceNode.attackGroup = attackGroup;
@@ -163,21 +208,27 @@ const UNSWVisualization = () => {
           nodeMap.set(destId, {
             id: destId,
             type: 'destination',
-            packets: 0,
-            bytes: 0,
             connections: 0,
             service: service,
             proto: proto,
             isAttack: false,
             attackGroup: 'Normal',
-            attacksReceived: 0
+            attacksReceived: 0,
+            features: {}
+          });
+          
+          numericFeatures.forEach(f => {
+            nodeMap.get(destId).features[f] = 0;
           });
         }
         
         const destNode = nodeMap.get(destId);
-        destNode.packets += packets;
-        destNode.bytes += bytes;
         destNode.connections += 1;
+        
+        numericFeatures.forEach(f => {
+          destNode.features[f] += rowFeatures[f];
+        });
+        
         if(isAttack) {
           destNode.attacksReceived += 1;
         }
@@ -186,17 +237,19 @@ const UNSWVisualization = () => {
         edgesList.push({
           source: sourceId,
           target: destId,
-          duration: duration,
-          rate: rate,
-          totalPackets: packets,
-          totalBytes: bytes,
           isAttack: isAttack,
           attackGroup: attackGroup,
           service: service,
           proto: proto,
-          state: state
+          state: state,
+          features: rowFeatures
         });
       }
+      
+      numericFeatures.forEach(f => {
+        stats[f].avg = stats[f].sum / stats[f].count;
+      });
+      setFeatureStats(stats);
       
       setLoadingStage('Building graph layout...');
       setLoadingProgress(75);
@@ -220,7 +273,10 @@ const UNSWVisualization = () => {
           .distanceMax(450))
         .force("center", d3.forceCenter(0, 0))
         .force("collision", d3.forceCollide()
-          .radius(d => Math.sqrt(d.packets) * 0.08 + 15))
+          .radius(d => {
+            const feat = d.features[config.nodeSizeFeature] || 0;
+            return Math.sqrt(feat) * 0.04 + 15;
+          }))
         .force("x", d3.forceX(d => d.type === 'source' ? -350 : 350)
           .strength(0.3))
         .force("y", d3.forceY(0).strength(0.1))
@@ -239,15 +295,12 @@ const UNSWVisualization = () => {
       const edges = d3Edges.map(edge => ({
         sourcePos: [edge.source.x, edge.source.y],
         targetPos: [edge.target.x, edge.target.y],
-        duration: edge.duration,
-        rate: edge.rate,
-        totalPackets: edge.totalPackets,
-        totalBytes: edge.totalBytes,
         isAttack: edge.isAttack,
         attackGroup: edge.attackGroup,
         service: edge.service,
         proto: edge.proto,
-        state: edge.state
+        state: edge.state,
+        features: edge.features
       }));
       
       setGraphData({ nodes, edges });
@@ -276,6 +329,12 @@ const UNSWVisualization = () => {
     }
   };
 
+  const normalizeFeature = (value, feature) => {
+    const stat = featureStats[feature];
+    if (!stat || stat.max === stat.min) return 0;
+    return (value - stat.min) / (stat.max - stat.min);
+  };
+
   const drawVisualization = () => {
     const canvas = canvasRef.current;
     if(!canvas) return;
@@ -296,21 +355,27 @@ const UNSWVisualization = () => {
         attackColors[edge.attackGroup] || attackColors['Generic'] : 
         attackColors['Normal'];
       
-      const opacity = Math.min(edge.duration / 100, 1) * 0.4 + 0.2;
-      const width = Math.max(0.5, Math.log(edge.rate + 1) * 0.4);
+      const opacityVal = edge.features[config.edgeOpacityFeature] || 0;
+      const normalizedOpacity = normalizeFeature(opacityVal, config.edgeOpacityFeature);
+      const opacity = normalizedOpacity * 0.6 + 0.2;
+      
+      const thicknessVal = edge.features[config.edgeThicknessFeature] || 0;
+      const normalizedThickness = normalizeFeature(thicknessVal, config.edgeThicknessFeature);
+      const edgeWidth = Math.max(0.5, normalizedThickness * 3 + 0.5);
       
       ctx.beginPath();
       ctx.moveTo(edge.sourcePos[0], edge.sourcePos[1]);
       ctx.lineTo(edge.targetPos[0], edge.targetPos[1]);
       ctx.strokeStyle = `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${opacity})`;
-      ctx.lineWidth = width;
+      ctx.lineWidth = edgeWidth;
       ctx.stroke();
     });
     
     // Node rendering
     graphData.nodes.forEach(node => {
       const color = getNodeColor(node);
-      const radius = Math.sqrt(node.packets) * 0.04 + 5;
+      const sizeVal = node.features[config.nodeSizeFeature] || 0;
+      const radius = Math.sqrt(sizeVal) * 0.04 + 5;
       
       ctx.beginPath();
       ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
@@ -347,7 +412,8 @@ const UNSWVisualization = () => {
     const y = (mouseY - canvas.height / 2 - transform.y) / transform.scale;
     
     const clickedNode = graphData.nodes.find(node => {
-      const radius = Math.sqrt(node.packets) * 0.04 + 5;
+      const sizeVal = node.features[config.nodeSizeFeature] || 0;
+      const radius = Math.sqrt(sizeVal) * 0.04 + 5;
       const dx = x - node.x;
       const dy = y - node.y;
       return Math.sqrt(dx * dx + dy * dy) < radius;
@@ -405,9 +471,13 @@ return (
     
     {/* Configuration Panel */}
     {showConfig && !loading && (
-      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'rgba(15, 23, 42, 0.95)', padding: '40px', borderRadius: '16px', color: 'white', zIndex: 20, minWidth: '500px', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'rgba(15, 23, 42, 0.95)', padding: '40px', borderRadius: '16px', color: 'white', zIndex: 20, minWidth: '600px', maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
         <h2 style={{ margin: '0 0 25px 0', fontSize: '24px', textAlign: 'center' }}>UNSW-NB15 Network Visualization</h2>
         
+        <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '15px', borderRadius: '8px', marginBottom: '25px', fontSize: '13px' }}>
+          <strong>Configure visualization parameters and select which dataset features to visualize</strong>
+        </div>
+
         <div style={{ marginBottom: '20px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Maximum Rows to Process:</label>
           <input 
@@ -422,33 +492,34 @@ return (
           <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Recommended: 10,000 - 50,000</div>
         </div>
 
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Number of Source Nodes:</label>
-          <input 
-            type="number" 
-            value={config.numSourceNodes}
-            onChange={(e) => setConfig({...config, numSourceNodes: parseInt(e.target.value) || 100})}
-            min="10"
-            max="5000"
-            step="50"
-            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-          />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '20px' }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Number of Source Nodes:</label>
+            <input 
+              type="number" 
+              value={config.numSourceNodes}
+              onChange={(e) => setConfig({...config, numSourceNodes: parseInt(e.target.value) || 100})}
+              min="10"
+              max="5000"
+              step="50"
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Number of Destination Nodes:</label>
+            <input 
+              type="number" 
+              value={config.numDestNodes}
+              onChange={(e) => setConfig({...config, numDestNodes: parseInt(e.target.value) || 100})}
+              min="10"
+              max="5000"
+              step="50"
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            />
+          </div>
         </div>
 
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Number of Destination Nodes:</label>
-          <input 
-            type="number" 
-            value={config.numDestNodes}
-            onChange={(e) => setConfig({...config, numDestNodes: parseInt(e.target.value) || 100})}
-            min="10"
-            max="5000"
-            step="50"
-            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-          />
-        </div>
-
-        <div style={{ marginBottom: '30px' }}>
+        <div style={{ marginBottom: '25px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Grouping Strategy:</label>
           <select 
             value={config.groupingStrategy}
@@ -466,19 +537,197 @@ return (
           </div>
         </div>
 
+        <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
+          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Feature Mapping</h3>
+          
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Node Size Feature:</label>
+            <select 
+              value={config.nodeSizeFeature}
+              onChange={(e) => setConfig({...config, nodeSizeFeature: e.target.value})}
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            >
+              {numericFeatures.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = larger nodes</div>
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Thickness Feature:</label>
+            <select 
+              value={config.edgeThicknessFeature}
+              onChange={(e) => setConfig({...config, edgeThicknessFeature: e.target.value})}
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            >
+              {numericFeatures.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = thicker edges</div>
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Opacity Feature:</label>
+            <select 
+              value={config.edgeOpacityFeature}
+              onChange={(e) => setConfig({...config, edgeOpacityFeature: e.target.value})}
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            >
+              {numericFeatures.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = more opaque edges</div>
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
+          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Filters</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Packets:</label>
+              <input 
+                type="number" 
+                value={config.filterMinPackets}
+                onChange={(e) => setConfig({...config, filterMinPackets: parseInt(e.target.value) || 0})}
+                min="0"
+                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Bytes:</label>
+              <input 
+                type="number" 
+                value={config.filterMinBytes}
+                onChange={(e) => setConfig({...config, filterMinBytes: parseInt(e.target.value) || 0})}
+                min="0"
+                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+              <input 
+                type="checkbox"
+                checked={config.showOnlyAttacks}
+                onChange={(e) => setConfig({...config, showOnlyAttacks: e.target.checked})}
+                style={{ marginRight: '8px' }}
+              />
+              <span style={{ fontSize: '14px' }}>Show only attack traffic</span>
+            </label>
+          </div>
+        </div>
+
         <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '15px', borderRadius: '8px', marginBottom: '25px', fontSize: '13px', lineHeight: '1.6' }}>
           <div style={{ fontWeight: '500', marginBottom: '8px' }}>Configuration Summary:</div>
-          <div>• Processing <strong>{config.maxRows.toLocaleString()}</strong> network flows</div>
-          <div>• Creating <strong>{(config.numSourceNodes + config.numDestNodes).toLocaleString()}</strong> total nodes</div>
-          <div>• Using <strong>{config.groupingStrategy}</strong> grouping strategy</div>
-          <div style={{ marginTop: '8px', color: '#94a3b8' }}>
-            Note: More nodes = more detail but slower performance
+          <div>- Processing <strong>{config.maxRows.toLocaleString()}</strong> network flows</div>
+          <div>- Creating <strong>{(config.numSourceNodes + config.numDestNodes).toLocaleString()}</strong> total nodes</div>
+          <div>- Using <strong>{config.groupingStrategy}</strong> grouping strategy</div>
+          <select 
+            value={config.groupingStrategy}
+            onChange={(e) => setConfig({...config, groupingStrategy: e.target.value})}
+            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+          >
+            <option value="modulo">Modulo (Even distribution)</option>
+            <option value="sequential">Sequential (Time-based grouping)</option>
+            <option value="service">Service-based (Group by service type)</option>
+          </select>
+        </div>
+
+        {/* Feature Selection */}
+        <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
+          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Feature Mapping</h3>
+          
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Node Size Feature:</label>
+            <select 
+              value={config.nodeSizeFeature}
+              onChange={(e) => setConfig({...config, nodeSizeFeature: e.target.value})}
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            >
+              {numericFeatures.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = larger nodes</div>
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Thickness Feature:</label>
+            <select 
+              value={config.edgeThicknessFeature}
+              onChange={(e) => setConfig({...config, edgeThicknessFeature: e.target.value})}
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            >
+              {numericFeatures.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = thicker edges</div>
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Opacity Feature:</label>
+            <select 
+              value={config.edgeOpacityFeature}
+              onChange={(e) => setConfig({...config, edgeOpacityFeature: e.target.value})}
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            >
+              {numericFeatures.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = more opaque edges</div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
+          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Filters</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Packets:</label>
+              <input 
+                type="number" 
+                value={config.filterMinPackets}
+                onChange={(e) => setConfig({...config, filterMinPackets: parseInt(e.target.value) || 0})}
+                min="0"
+                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Bytes:</label>
+              <input 
+                type="number" 
+                value={config.filterMinBytes}
+                onChange={(e) => setConfig({...config, filterMinBytes: parseInt(e.target.value) || 0})}
+                min="0"
+                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+              <input 
+                type="checkbox"
+                checked={config.showOnlyAttacks}
+                onChange={(e) => setConfig({...config, showOnlyAttacks: e.target.checked})}
+                style={{ marginRight: '8px' }}
+              />
+              <span style={{ fontSize: '14px' }}>Show only attack traffic</span>
+            </label>
           </div>
         </div>
 
         <button 
           onClick={startVisualization}
-          style={{ width: '100%', padding: '14px', borderRadius: '8px', border: 'none', background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: 'white', cursor: 'pointer', fontSize: '16px', fontWeight: '500', transition: 'transform 0.2s' }}
+          style={{ width: '100%', padding: '14px', borderRadius: '8px', border: 'none', background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: 'white', cursor: 'pointer', fontSize: '16px', fontWeight: '500', transition: 'transform 0.2s', marginTop: '25px' }}
           onMouseEnter={(e) => e.target.style.transform = 'translateY(-2px)'}
           onMouseLeave={(e) => e.target.style.transform = 'translateY(0)'}
         >
@@ -490,7 +739,7 @@ return (
     {/* Loading Screen */}
     {loading && (
       <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'white', zIndex: 10, textAlign: 'center', background: 'rgba(0, 0, 0, 0.8)', padding: '30px', borderRadius: '12px', minWidth: '300px'}}>
-        <div style={{ fontSize: '20px', marginBottom: '20px' }}>Loading UNSW-NB15 network traffic...</div>
+        <div style={{ fontSize: '20px', marginBottom: '20px' }}>Loading UNSW-NB15 data...</div>
         <div style={{width: '100%', height: '8px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '15px'}}>
           <div style={{width: `${loadingProgress}%`, height: '100%', background: 'linear-gradient(90deg, #3b82f6, #06b6d4)', transition: 'width 0.3s ease', borderRadius: '4px'}}></div>
         </div>
@@ -504,13 +753,20 @@ return (
     
     {/* Controls */}
     {!showConfig && (
-      <div style={{position: 'absolute', top: 20, left: 20, background: 'rgba(0, 0, 0, 0.8)', padding: '15px', borderRadius: '8px', color: 'white', zIndex: 10, minWidth: '250px'}}>
-        <h3 style={{ margin: '0 0 15px 0', fontSize: '16px' }}>UNSW-NB15 Network Visualization</h3>
+      <div style={{position: 'absolute', top: 20, left: 20, background: 'rgba(0, 0, 0, 0.8)', padding: '15px', borderRadius: '8px', color: 'white', zIndex: 10, minWidth: '280px', maxHeight: '80vh', overflowY: 'auto'}}>
+        <h3 style={{ margin: '0 0 15px 0', fontSize: '16px' }}>UNSW-NB15 Visualization</h3>
         
         <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '10px', borderRadius: '6px', marginBottom: '15px', fontSize: '12px' }}>
           <div><strong>Nodes:</strong> {graphData.nodes.length.toLocaleString()}</div>
           <div><strong>Edges:</strong> {graphData.edges.length.toLocaleString()}</div>
           <div><strong>Strategy:</strong> {config.groupingStrategy}</div>
+        </div>
+
+        <div style={{ background: 'rgba(168, 85, 247, 0.1)', padding: '10px', borderRadius: '6px', marginBottom: '15px', fontSize: '12px' }}>
+          <div style={{ fontWeight: '500', marginBottom: '5px' }}>Visual Features:</div>
+          <div>- Size: {config.nodeSizeFeature}</div>
+          <div>- Edge width: {config.edgeThicknessFeature}</div>
+          <div>- Edge opacity: {config.edgeOpacityFeature}</div>
         </div>
         
         <div style={{ marginBottom: '15px' }}>
@@ -536,26 +792,102 @@ return (
             <div>- Click nodes for details</div>
           </div>
           
-          <div><strong>Legend:</strong></div>
-          {colorMode === 'attack' ? (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', marginTop: '8px' }}>
-                <div style={{ width: '12px', height: '12px', background: 'rgb(52, 211, 153)', marginRight: '8px', borderRadius: '2px' }}></div>
-                Normal Traffic
+          <div style={{ paddingTop: '8px' }}>
+            <strong>Color Legend:</strong>
+            {colorMode === 'attack' ? (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(52, 211, 153)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Normal
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(248, 113, 113)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Generic
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(239, 68, 68)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Exploits
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(220, 38, 38)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Fuzzers
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(251, 146, 60)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  DoS
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(168, 85, 247)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Reconnaissance
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(236, 72, 153)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Analysis
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(147, 51, 234)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Backdoor
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(244, 63, 94)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Shellcode
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(251, 191, 36)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Worms
+                </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', marginTop: '5px' }}>
-                <div style={{ width: '12px', height: '12px', background: 'rgb(251, 146, 60)', marginRight: '8px', borderRadius: '2px' }}></div>
-                ICMP
+            ) : colorMode === 'service' ? (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(59, 130, 246)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  HTTP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(37, 99, 235)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  HTTPS
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(234, 179, 8)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  SSH
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(16, 185, 129)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  DNS
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(249, 115, 22)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  FTP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(139, 92, 246)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  SMTP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(148, 163, 184)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Other
+                </div>
               </div>
-            </>
-          ) : null}
-          
-          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #444' }}>
-            <div><strong>Visual Key:</strong></div>
-            <div style={{ marginTop: '5px' }}>- Node size = Packet count</div>
-            <div>- Edge thickness = Flow rate</div>
-            <div>- Edge opacity = Duration</div>
-            <div>- Purple ring = Scanner</div>
+            ) : (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(59, 130, 246)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  TCP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(16, 185, 129)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  UDP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(251, 146, 60)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  ICMP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(148, 163, 184)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Other
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -563,7 +895,7 @@ return (
     
     {/* Node details panel */}
     {selectedNode && !showConfig && (
-      <div style={{position: 'absolute', top: 20, right: 20, background: 'rgba(0, 0, 0, 0.9)', padding: '15px', borderRadius: '8px', color: 'white', zIndex: 10, minWidth: '280px', maxWidth: '350px'}}>
+      <div style={{position: 'absolute', top: 20, right: 20, background: 'rgba(0, 0, 0, 0.9)', padding: '15px', borderRadius: '8px', color: 'white', zIndex: 10, minWidth: '280px', maxWidth: '350px', maxHeight: '80vh', overflowY: 'auto'}}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <h4 style={{ margin: 0, fontSize: '14px' }}>Node Details</h4>
           <button 
@@ -577,20 +909,40 @@ return (
           <div><strong>Type:</strong> {selectedNode.type === 'source' ? 'Source Node' : 'Service Node'}</div>
           <div><strong>Service:</strong> {selectedNode.service}</div>
           <div><strong>Protocol:</strong> {selectedNode.proto}</div>
-          <div><strong>Total Packets:</strong> {selectedNode.packets.toLocaleString()}</div>
-          <div><strong>Total Bytes:</strong> {selectedNode.bytes.toLocaleString()}</div>
           <div><strong>Connections:</strong> {selectedNode.connections}</div>
+          
+          <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
+            <div style={{ fontWeight: '500', marginBottom: '8px' }}>Selected Features:</div>
+            <div><strong>{config.nodeSizeFeature}:</strong> {selectedNode.features[config.nodeSizeFeature]?.toFixed(2) || 0}</div>
+          </div>
+          
+          <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
+            <div style={{ fontWeight: '500', marginBottom: '8px' }}>All Features:</div>
+            {Object.entries(selectedNode.features).slice(0, 10).map(([key, val]) => (
+              <div key={key}><strong>{key}:</strong> {typeof val === 'number' ? val.toFixed(2) : val}</div>
+            ))}
+            {Object.keys(selectedNode.features).length > 10 && (
+              <div style={{ marginTop: '5px', color: '#94a3b8', fontStyle: 'italic' }}>
+                ...and {Object.keys(selectedNode.features).length - 10} more
+              </div>
+            )}
+          </div>
+          
           {selectedNode.type === 'source' && (
             <>
-              <div><strong>Scanner Activity:</strong> {selectedNode.scannerActivity > 0 ? 'Yes' : 'No'}</div>
-              <div><strong>Attack Traffic:</strong> {selectedNode.isAttack ? 'Yes' : 'No'}</div>
-              {selectedNode.isAttack && (
-                <div><strong>Attack Type:</strong> {selectedNode.attackGroup}</div>
-              )}
+              <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
+                <div><strong>Scanner Activity:</strong> {selectedNode.scannerActivity > 0 ? 'Yes' : 'No'}</div>
+                <div><strong>Attack Traffic:</strong> {selectedNode.isAttack ? 'Yes' : 'No'}</div>
+                {selectedNode.isAttack && (
+                  <div><strong>Attack Type:</strong> {selectedNode.attackGroup}</div>
+                )}
+              </div>
             </>
           )}
           {selectedNode.type === 'destination' && (
-            <div><strong>Attacks Received:</strong> {selectedNode.attacksReceived}</div>
+            <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
+              <div><strong>Attacks Received:</strong> {selectedNode.attacksReceived}</div>
+            </div>
           )}
         </div>
       </div>
