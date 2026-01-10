@@ -35,6 +35,8 @@ const CICIDSVisualization = () => {
   const [error, setError] = useState(null);
   const [showConfig, setShowConfig] = useState(true);
   const [availableFeatures, setAvailableFeatures] = useState([]);
+  const [featureMetrics, setFeatureMetrics] = useState({});
+  const [metricsLoaded, setMetricsLoaded] = useState(false);
   
   // Configuration state
   const [config, setConfig] = useState({
@@ -70,6 +72,54 @@ const CICIDSVisualization = () => {
     'RST Flag Count', 'ACK Flag Count', 'Down/Up Ratio', 'Average Packet Size',
     'packets_total', 'bytes_total', 'avg_packet_size'
   ];
+  useEffect(() => {
+    const loadFeatureMetrics = async () => {
+      try {
+        const response = await fetch('/feature_metrics_cicids.csv');
+        if (!response.ok) throw new Error('Could not load feature metrics');
+        const csvText = await response.text();
+        
+        const lines = csvText.split('\n');
+        const headers = lines[0].split(',').map(h => h.trim());
+        
+        const metrics = {};
+        for (let i = 1; i < lines.length; i++) {
+          if (!lines[i].trim()) continue;
+          const values = lines[i].split(',');
+          if (values.length < headers.length) continue;
+          
+          const featureName = values[0].trim();
+          metrics[featureName] = {
+            importance: parseFloat(values[headers.indexOf('importance')]) || 0,
+            mutual_info: parseFloat(values[headers.indexOf('mutual_info')]) || 0,
+            correlation: parseFloat(values[headers.indexOf('correlation')]) || 0,
+            cohens_d: parseFloat(values[headers.indexOf('cohens_d')]) || 0,
+            interpretability: parseFloat(values[headers.indexOf('interpretability')]) || 0,
+            usefulness_score: parseFloat(values[headers.indexOf('usefulness_score')]) || 0,
+            combined_score: parseFloat(values[headers.indexOf('combined_score')]) || 0,
+            feature_group: values[headers.indexOf('feature_group')]?.trim() || 'Unknown'
+          };
+        }
+        
+        setFeatureMetrics(metrics);
+        setMetricsLoaded(true);
+      } catch (err) {
+        console.warn('Feature metrics not loaded:', err);
+        setMetricsLoaded(false);
+      }
+    };
+    
+    loadFeatureMetrics();
+  }, []);
+
+  const getFeatureMetric = (featureName) => {
+    return featureMetrics[featureName] || { 
+      usefulness_score: 0, 
+      interpretability: 0, 
+      combined_score: 0, 
+      feature_group: 'Unknown' 
+    };
+  };
 
   useEffect(() => {
     if (!loading && graphData.nodes.length > 0) {
@@ -457,357 +507,428 @@ const CICIDSVisualization = () => {
     setTransform({ x: 0, y: 0, scale: 1 });
   };
 
-  return (
-    <div style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0, fontFamily: 'system-ui, sans-serif', background: '#0f172a' }}>
-      
-      {/* Configuration Panel */}
-      {showConfig && !loading && (
-        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'rgba(15, 23, 42, 0.95)', padding: '40px', borderRadius: '16px', color: 'white', zIndex: 20, minWidth: '600px', maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
-          <h2 style={{ margin: '0 0 25px 0', fontSize: '24px', textAlign: 'center' }}>CICIDS-2017 Feature Visualization</h2>
-          
-          <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '15px', borderRadius: '8px', marginBottom: '25px', fontSize: '13px' }}>
-            <strong>Configure visualization parameters and select which dataset features to visualize</strong>
-          </div>
+return (
+  <div style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0, fontFamily: 'system-ui, sans-serif', background: '#0f172a' }}>
+    
+    {/* Configuration Panel */}
+    {showConfig && !loading && (
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'rgba(15, 23, 42, 0.95)', padding: '40px', borderRadius: '16px', color: 'white', zIndex: 20, minWidth: '600px', maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+        <h2 style={{ margin: '0 0 25px 0', fontSize: '24px', textAlign: 'center' }}>CICIDS-2017 Feature Visualization</h2>
+        
+        <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '15px', borderRadius: '8px', marginBottom: '25px', fontSize: '13px' }}>
+          <strong>Configure visualization parameters and select which dataset features to visualize</strong>
+        </div>
 
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Maximum Rows to Process:</label>
+        <div style={{ marginBottom: '20px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Maximum Rows to Process:</label>
+          <input 
+            type="number" 
+            value={config.maxRows}
+            onChange={(e) => setConfig({...config, maxRows: parseInt(e.target.value) || 1000})}
+            min="1000"
+            max="100000"
+            step="1000"
+            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+          />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '20px' }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Source Nodes:</label>
             <input 
               type="number" 
-              value={config.maxRows}
-              onChange={(e) => setConfig({...config, maxRows: parseInt(e.target.value) || 1000})}
-              min="1000"
-              max="100000"
-              step="1000"
+              value={config.numSourceNodes}
+              onChange={(e) => setConfig({...config, numSourceNodes: parseInt(e.target.value) || 100})}
+              min="10"
+              max="5000"
+              step="50"
               style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
             />
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '20px' }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Source Nodes:</label>
-              <input 
-                type="number" 
-                value={config.numSourceNodes}
-                onChange={(e) => setConfig({...config, numSourceNodes: parseInt(e.target.value) || 100})}
-                min="10"
-                max="5000"
-                step="50"
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Destination Nodes:</label>
-              <input 
-                type="number" 
-                value={config.numDestNodes}
-                onChange={(e) => setConfig({...config, numDestNodes: parseInt(e.target.value) || 100})}
-                min="10"
-                max="5000"
-                step="50"
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-              />
-            </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Destination Nodes:</label>
+            <input 
+              type="number" 
+              value={config.numDestNodes}
+              onChange={(e) => setConfig({...config, numDestNodes: parseInt(e.target.value) || 100})}
+              min="10"
+              max="5000"
+              step="50"
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            />
           </div>
+        </div>
 
-          <div style={{ marginBottom: '25px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Grouping Strategy:</label>
+        <div style={{ marginBottom: '25px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Grouping Strategy:</label>
+          <select 
+            value={config.groupingStrategy}
+            onChange={(e) => setConfig({...config, groupingStrategy: e.target.value})}
+            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+          >
+            <option value="modulo">Modulo (Even distribution)</option>
+            <option value="sequential">Sequential (Time-based grouping)</option>
+            <option value="port">Port-based (Unique ports as destinations)</option>
+          </select>
+        </div>
+
+        <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
+          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Feature Mapping</h3>
+          
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Node Size Feature:</label>
             <select 
-              value={config.groupingStrategy}
-              onChange={(e) => setConfig({...config, groupingStrategy: e.target.value})}
+              value={config.nodeSizeFeature}
+              onChange={(e) => setConfig({...config, nodeSizeFeature: e.target.value})}
               style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
             >
-              <option value="modulo">Modulo (Even distribution)</option>
-              <option value="sequential">Sequential (Time-based grouping)</option>
-              <option value="port">Port-based (Unique ports as destinations)</option>
+              {numericFeatures.map(f => {
+                const metric = getFeatureMetric(f);
+                return (
+                  <option key={f} value={f}>
+                    {f} {metricsLoaded && metric.combined_score > 0 ? `(${metric.combined_score.toFixed(2)})` : ''}
+                  </option>
+                );
+              })}
             </select>
-          </div>
-
-          <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
-            <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Feature Mapping</h3>
-            
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Node Size Feature:</label>
-              <select 
-                value={config.nodeSizeFeature}
-                onChange={(e) => setConfig({...config, nodeSizeFeature: e.target.value})}
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-              >
-                {numericFeatures.map(f => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
-              <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = larger nodes</div>
-            </div>
-
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Thickness Feature:</label>
-              <select 
-                value={config.edgeThicknessFeature}
-                onChange={(e) => setConfig({...config, edgeThicknessFeature: e.target.value})}
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-              >
-                {numericFeatures.map(f => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
-              <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = thicker edges</div>
-            </div>
-
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Opacity Feature:</label>
-              <select 
-                value={config.edgeOpacityFeature}
-                onChange={(e) => setConfig({...config, edgeOpacityFeature: e.target.value})}
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-              >
-                {numericFeatures.map(f => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
-              <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = more opaque edges</div>
-            </div>
-          </div>
-
-          <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
-            <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Filters</h3>
-            
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Packets:</label>
-                <input 
-                  type="number" 
-                  value={config.filterMinPackets}
-                  onChange={(e) => setConfig({...config, filterMinPackets: parseInt(e.target.value) || 0})}
-                  min="0"
-                  style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-                />
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = larger nodes</div>
+            {metricsLoaded && (
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px', padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '4px' }}>
+                {(() => {
+                  const metric = getFeatureMetric(config.nodeSizeFeature);
+                  return (
+                    <>
+                      <div><strong>Quality Score:</strong> {metric.combined_score.toFixed(3)}</div>
+                      <div><strong>Interpretability:</strong> {metric.interpretability.toFixed(2)}</div>
+                      <div><strong>Usefulness:</strong> {metric.usefulness_score.toFixed(2)}</div>
+                      <div><strong>Group:</strong> {metric.feature_group}</div>
+                    </>
+                  );
+                })()}
               </div>
-              <div>
-                <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Bytes:</label>
-                <input 
-                  type="number" 
-                  value={config.filterMinBytes}
-                  onChange={(e) => setConfig({...config, filterMinBytes: parseInt(e.target.value) || 0})}
-                  min="0"
-                  style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-                />
-              </div>
-            </div>
+            )}
+          </div>
 
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                <input 
-                  type="checkbox"
-                  checked={config.showOnlyAttacks}
-                  onChange={(e) => setConfig({...config, showOnlyAttacks: e.target.checked})}
-                  style={{ marginRight: '8px' }}
-                />
-                <span style={{ fontSize: '14px' }}>Show only attack traffic</span>
-              </label>
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Thickness Feature:</label>
+            <select 
+              value={config.edgeThicknessFeature}
+              onChange={(e) => setConfig({...config, edgeThicknessFeature: e.target.value})}
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            >
+              {numericFeatures.map(f => {
+                const metric = getFeatureMetric(f);
+                return (
+                  <option key={f} value={f}>
+                    {f} {metricsLoaded && metric.combined_score > 0 ? `(${metric.combined_score.toFixed(2)})` : ''}
+                  </option>
+                );
+              })}
+            </select>
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = thicker edges</div>
+            {metricsLoaded && (
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px', padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '4px' }}>
+                {(() => {
+                  const metric = getFeatureMetric(config.edgeThicknessFeature);
+                  return (
+                    <>
+                      <div><strong>Quality Score:</strong> {metric.combined_score.toFixed(3)}</div>
+                      <div><strong>Interpretability:</strong> {metric.interpretability.toFixed(2)}</div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Opacity Feature:</label>
+            <select 
+              value={config.edgeOpacityFeature}
+              onChange={(e) => setConfig({...config, edgeOpacityFeature: e.target.value})}
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+            >
+              {numericFeatures.map(f => {
+                const metric = getFeatureMetric(f);
+                return (
+                  <option key={f} value={f}>
+                    {f} {metricsLoaded && metric.combined_score > 0 ? `(${metric.combined_score.toFixed(2)})` : ''}
+                  </option>
+                );
+              })}
+            </select>
+            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = more opaque edges</div>
+            {metricsLoaded && (
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px', padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '4px' }}>
+                {(() => {
+                  const metric = getFeatureMetric(config.edgeOpacityFeature);
+                  return (
+                    <>
+                      <div><strong>Quality Score:</strong> {metric.combined_score.toFixed(3)}</div>
+                      <div><strong>Interpretability:</strong> {metric.interpretability.toFixed(2)}</div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
+          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Filters</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Packets:</label>
+              <input 
+                type="number" 
+                value={config.filterMinPackets}
+                onChange={(e) => setConfig({...config, filterMinPackets: parseInt(e.target.value) || 0})}
+                min="0"
+                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Bytes:</label>
+              <input 
+                type="number" 
+                value={config.filterMinBytes}
+                onChange={(e) => setConfig({...config, filterMinBytes: parseInt(e.target.value) || 0})}
+                min="0"
+                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
+              />
             </div>
           </div>
 
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+              <input 
+                type="checkbox"
+                checked={config.showOnlyAttacks}
+                onChange={(e) => setConfig({...config, showOnlyAttacks: e.target.checked})}
+                style={{ marginRight: '8px' }}
+              />
+              <span style={{ fontSize: '14px' }}>Show only attack traffic</span>
+            </label>
+          </div>
+        </div>
+
+        <button 
+          onClick={startVisualization}
+          style={{ width: '100%', padding: '14px', borderRadius: '8px', border: 'none', background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: 'white', cursor: 'pointer', fontSize: '16px', fontWeight: '500', transition: 'transform 0.2s', marginTop: '25px' }}
+          onMouseEnter={(e) => e.target.style.transform = 'translateY(-2px)'}
+          onMouseLeave={(e) => e.target.style.transform = 'translateY(0)'}
+        >
+          Load Visualization
+        </button>
+      </div>
+    )}
+
+    {/* Loading Screen */}
+    {loading && (
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'white', zIndex: 10, textAlign: 'center', background: 'rgba(0, 0, 0, 0.8)', padding: '30px', borderRadius: '12px', minWidth: '300px'}}>
+        <div style={{ fontSize: '20px', marginBottom: '20px' }}>Loading CICIDS-2017 network traffic...</div>
+        <div style={{width: '100%', height: '8px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '15px'}}>
+          <div style={{width: `${loadingProgress}%`, height: '100%', background: 'linear-gradient(90deg, #3b82f6, #06b6d4)', transition: 'width 0.3s ease', borderRadius: '4px'}}></div>
+        </div>
+        <div style={{fontSize: '14px', color: '#94a3b8'}}>{loadingStage} ({loadingProgress}%)</div>
+      </div>
+    )}
+    
+    {error && (
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#f87171', fontSize: '16px', zIndex: 10, textAlign: 'center'}}>Error: {error}</div>
+    )}
+    
+    {/* Controls */}
+    {!showConfig && (
+      <div style={{position: 'absolute', top: 20, left: 20, background: 'rgba(0, 0, 0, 0.8)', padding: '15px', borderRadius: '8px', color: 'white', zIndex: 10, minWidth: '280px', maxHeight: '80vh', overflowY: 'auto'}}>
+        <h3 style={{ margin: '0 0 15px 0', fontSize: '16px' }}>CICIDS-2017 Visualization</h3>
+        
+        <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '10px', borderRadius: '6px', marginBottom: '15px', fontSize: '12px' }}>
+          <div><strong>Nodes:</strong> {graphData.nodes.length.toLocaleString()}</div>
+          <div><strong>Edges:</strong> {graphData.edges.length.toLocaleString()}</div>
+          <div><strong>Strategy:</strong> {config.groupingStrategy}</div>
+        </div>
+
+        <div style={{ background: 'rgba(168, 85, 247, 0.1)', padding: '10px', borderRadius: '6px', marginBottom: '15px', fontSize: '12px' }}>
+          <div style={{ fontWeight: '500', marginBottom: '5px' }}>Visual Features:</div>
+          <div>• Size: {config.nodeSizeFeature}</div>
+          <div>• Edge width: {config.edgeThicknessFeature}</div>
+          <div>• Edge opacity: {config.edgeOpacityFeature}</div>
+          {metricsLoaded && (
+            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.1)', fontSize: '11px' }}>
+              <div>Quality: {getFeatureMetric(config.nodeSizeFeature).combined_score.toFixed(2)}</div>
+            </div>
+          )}
+        </div>
+        
+        <div style={{ marginBottom: '15px' }}>
+          <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>Color Mode:</label>
+          <select 
+            value={colorMode} 
+            onChange={(e) => setColorMode(e.target.value)}
+            style={{width: '100%', padding: '5px', borderRadius: '4px', border: 'none', background: '#333', color: 'white'}}>
+            <option value="attack">Attack Status</option>
+            <option value="service">Service Type</option>
+          </select>
+        </div>
+
+        <button onClick={handleReset} style={{width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', border: 'none', background: '#3b82f6', color: 'white', cursor: 'pointer', fontSize: '14px'}}>Reset View</button>
+        <button onClick={handleReconfigure} style={{width: '100%', padding: '8px', marginBottom: '15px', borderRadius: '4px', border: 'none', background: '#8b5cf6', color: 'white', cursor: 'pointer', fontSize: '14px'}}>Reconfigure</button>
+        
+        <div style={{ fontSize: '12px', lineHeight: '1.6' }}>
+          <div style={{ marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #444' }}>
+            <strong>Controls:</strong>
+            <div style={{ marginTop: '4px' }}>- Drag to pan</div>
+            <div>- Scroll to zoom</div>
+            <div>- Click nodes for details</div>
+          </div>
+          
+          <div style={{ paddingTop: '8px' }}>
+            <strong>Color Legend:</strong>
+            {colorMode === 'attack' ? (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(52, 211, 153)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Benign
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(248, 113, 113)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Attack
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(239, 68, 68)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  DoS
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(220, 38, 38)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  DDoS
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(251, 146, 60)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  PortScan
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(168, 85, 247)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  BruteForce
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(236, 72, 153)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Web
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(147, 51, 234)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Infiltration
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(244, 63, 94)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Botnet
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(59, 130, 246)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  HTTP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(37, 99, 235)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  HTTPS
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(234, 179, 8)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  SSH
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(16, 185, 129)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  DNS
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(249, 115, 22)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  FTP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(139, 92, 246)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  SMTP
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                  <div style={{ width: '12px', height: '12px', background: 'rgb(148, 163, 184)', marginRight: '8px', borderRadius: '2px' }}></div>
+                  Other
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    
+    {/* Node details panel */}
+    {selectedNode && !showConfig && (
+      <div style={{position: 'absolute', top: 20, right: 20, background: 'rgba(0, 0, 0, 0.9)', padding: '15px', borderRadius: '8px', color: 'white', zIndex: 10, minWidth: '280px', maxWidth: '350px', maxHeight: '80vh', overflowY: 'auto'}}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <h4 style={{ margin: 0, fontSize: '14px' }}>Node Details</h4>
           <button 
-            onClick={startVisualization}
-            style={{ width: '100%', padding: '14px', borderRadius: '8px', border: 'none', background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: 'white', cursor: 'pointer', fontSize: '16px', fontWeight: '500', transition: 'transform 0.2s', marginTop: '25px' }}
-            onMouseEnter={(e) => e.target.style.transform = 'translateY(-2px)'}
-            onMouseLeave={(e) => e.target.style.transform = 'translateY(0)'}
-          >
-            Load Visualization
+            onClick={() => setSelectedNode(null)}
+            style={{background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: '18px'}}>
+            ×
           </button>
         </div>
-      )}
-
-      {/* Loading Screen */}
-      {loading && (
-        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'white', zIndex: 10, textAlign: 'center', background: 'rgba(0, 0, 0, 0.8)', padding: '30px', borderRadius: '12px', minWidth: '300px'}}>
-          <div style={{ fontSize: '20px', marginBottom: '20px' }}>Loading CICIDS-2017 network traffic...</div>
-          <div style={{width: '100%', height: '8px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '15px'}}>
-            <div style={{width: `${loadingProgress}%`, height: '100%', background: 'linear-gradient(90deg, #3b82f6, #06b6d4)', transition: 'width 0.3s ease', borderRadius: '4px'}}></div>
-          </div>
-          <div style={{fontSize: '14px', color: '#94a3b8'}}>{loadingStage} ({loadingProgress}%)</div>
-        </div>
-      )}
-      
-      {error && (
-        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#f87171', fontSize: '16px', zIndex: 10, textAlign: 'center'}}>Error: {error}</div>
-      )}
-      
-      {/* Controls */}
-      {!showConfig && (
-        <div style={{position: 'absolute', top: 20, left: 20, background: 'rgba(0, 0, 0, 0.8)', padding: '15px', borderRadius: '8px', color: 'white', zIndex: 10, minWidth: '280px', maxHeight: '80vh', overflowY: 'auto'}}>
-          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px' }}>CICIDS-2017 Visualization</h3>
+        <div style={{ fontSize: '12px', lineHeight: '1.8' }}>
+          <div><strong>ID:</strong> {selectedNode.id}</div>
+          <div><strong>Type:</strong> {selectedNode.type === 'source' ? 'Source IP' : 'Service/Port'}</div>
+          {selectedNode.type === 'destination' && (
+            <div><strong>Port:</strong> {selectedNode.port}</div>
+          )}
+          <div><strong>Service:</strong> {selectedNode.service}</div>
+          <div><strong>Connections:</strong> {selectedNode.connections}</div>
           
-          <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '10px', borderRadius: '6px', marginBottom: '15px', fontSize: '12px' }}>
-            <div><strong>Nodes:</strong> {graphData.nodes.length.toLocaleString()}</div>
-            <div><strong>Edges:</strong> {graphData.edges.length.toLocaleString()}</div>
-            <div><strong>Strategy:</strong> {config.groupingStrategy}</div>
-          </div>
-
-          <div style={{ background: 'rgba(168, 85, 247, 0.1)', padding: '10px', borderRadius: '6px', marginBottom: '15px', fontSize: '12px' }}>
-            <div style={{ fontWeight: '500', marginBottom: '5px' }}>Visual Features:</div>
-            <div>• Size: {config.nodeSizeFeature}</div>
-            <div>• Edge width: {config.edgeThicknessFeature}</div>
-            <div>• Edge opacity: {config.edgeOpacityFeature}</div>
+          <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
+            <div style={{ fontWeight: '500', marginBottom: '8px' }}>Selected Features:</div>
+            <div>
+              <strong>{config.nodeSizeFeature}:</strong> {selectedNode.features[config.nodeSizeFeature]?.toFixed(2) || 0}
+              {metricsLoaded && (() => {
+                const metric = getFeatureMetric(config.nodeSizeFeature);
+                return (
+                  <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>
+                    Quality: {metric.combined_score.toFixed(2)} | Interp: {metric.interpretability.toFixed(2)}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
           
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>Color Mode:</label>
-            <select 
-              value={colorMode} 
-              onChange={(e) => setColorMode(e.target.value)}
-              style={{width: '100%', padding: '5px', borderRadius: '4px', border: 'none', background: '#333', color: 'white'}}>
-              <option value="attack">Attack Status</option>
-              <option value="service">Service Type</option>
-            </select>
-          </div>
-
-          <button onClick={handleReset} style={{width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', border: 'none', background: '#3b82f6', color: 'white', cursor: 'pointer', fontSize: '14px'}}>Reset View</button>
-          <button onClick={handleReconfigure} style={{width: '100%', padding: '8px', marginBottom: '15px', borderRadius: '4px', border: 'none', background: '#8b5cf6', color: 'white', cursor: 'pointer', fontSize: '14px'}}>Reconfigure</button>
-          
-          <div style={{ fontSize: '12px', lineHeight: '1.6' }}>
-            <div style={{ marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #444' }}>
-              <strong>Controls:</strong>
-              <div style={{ marginTop: '4px' }}>- Drag to pan</div>
-              <div>- Scroll to zoom</div>
-              <div>- Click nodes for details</div>
-            </div>
-            
-            <div style={{ paddingTop: '8px' }}>
-              <strong>Color Legend:</strong>
-              {colorMode === 'attack' ? (
-                <div style={{ marginTop: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(52, 211, 153)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    Benign
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(248, 113, 113)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    Attack
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(239, 68, 68)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    DoS
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(220, 38, 38)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    DDoS
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(251, 146, 60)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    PortScan
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(168, 85, 247)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    BruteForce
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(236, 72, 153)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    Web
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(147, 51, 234)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    Infiltration
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(244, 63, 94)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    Botnet
-                  </div>
-                </div>
-              ) : (
-                <div style={{ marginTop: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(59, 130, 246)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    HTTP
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(37, 99, 235)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    HTTPS
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(234, 179, 8)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    SSH
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(16, 185, 129)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    DNS
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(249, 115, 22)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    FTP
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(139, 92, 246)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    SMTP
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                    <div style={{ width: '12px', height: '12px', background: 'rgb(148, 163, 184)', marginRight: '8px', borderRadius: '2px' }}></div>
-                    Other
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Node details panel */}
-      {selectedNode && !showConfig && (
-        <div style={{position: 'absolute', top: 20, right: 20, background: 'rgba(0, 0, 0, 0.9)', padding: '15px', borderRadius: '8px', color: 'white', zIndex: 10, minWidth: '280px', maxWidth: '350px', maxHeight: '80vh', overflowY: 'auto'}}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <h4 style={{ margin: 0, fontSize: '14px' }}>Node Details</h4>
-            <button 
-              onClick={() => setSelectedNode(null)}
-              style={{background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: '18px'}}>
-              ×
-            </button>
-          </div>
-          <div style={{ fontSize: '12px', lineHeight: '1.8' }}>
-            <div><strong>ID:</strong> {selectedNode.id}</div>
-            <div><strong>Type:</strong> {selectedNode.type === 'source' ? 'Source IP' : 'Service/Port'}</div>
-            {selectedNode.type === 'destination' && (
-              <div><strong>Port:</strong> {selectedNode.port}</div>
-            )}
-            <div><strong>Service:</strong> {selectedNode.service}</div>
-            <div><strong>Connections:</strong> {selectedNode.connections}</div>
-            
-            <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
-              <div style={{ fontWeight: '500', marginBottom: '8px' }}>Selected Features:</div>
-              <div><strong>{config.nodeSizeFeature}:</strong> {selectedNode.features[config.nodeSizeFeature]?.toFixed(2) || 0}</div>
-            </div>
-            
-            <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
-              <div style={{ fontWeight: '500', marginBottom: '8px' }}>All Features:</div>
-              {Object.entries(selectedNode.features).slice(0, 10).map(([key, val]) => (
-                <div key={key}><strong>{key}:</strong> {typeof val === 'number' ? val.toFixed(2) : val}</div>
-              ))}
-              {Object.keys(selectedNode.features).length > 10 && (
-                <div style={{ marginTop: '5px', color: '#94a3b8', fontStyle: 'italic' }}>
-                  ...and {Object.keys(selectedNode.features).length - 10} more
-                </div>
-              )}
-            </div>
-            
-            {selectedNode.type === 'source' && (
-              <>
-                <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
-                  <div><strong>Attack Count:</strong> {selectedNode.attackCount}</div>
-                  <div><strong>Attack Traffic:</strong> {selectedNode.isAttack ? 'Yes' : 'No'}</div>
-                  {selectedNode.isAttack && (
-                    <div><strong>Attack Type:</strong> {selectedNode.attackGroup}</div>
-                  )}
-                </div>
-              </>
-            )}
-            {selectedNode.type === 'destination' && (
-              <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
-                <div><strong>Attacks Received:</strong> {selectedNode.attacksReceived}</div>
+          <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
+            <div style={{ fontWeight: '500', marginBottom: '8px' }}>All Features:</div>
+            {Object.entries(selectedNode.features).slice(0, 10).map(([key, val]) => (
+              <div key={key}><strong>{key}:</strong> {typeof val === 'number' ? val.toFixed(2) : val}</div>
+            ))}
+            {Object.keys(selectedNode.features).length > 10 && (
+              <div style={{ marginTop: '5px', color: '#94a3b8', fontStyle: 'italic' }}>
+                ...and {Object.keys(selectedNode.features).length - 10} more
               </div>
             )}
           </div>
+          
+          {selectedNode.type === 'source' && (
+            <>
+              <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
+                <div><strong>Attack Count:</strong> {selectedNode.attackCount}</div>
+                <div><strong>Attack Traffic:</strong> {selectedNode.isAttack ? 'Yes' : 'No'}</div>
+                {selectedNode.isAttack && (
+                  <div><strong>Attack Type:</strong> {selectedNode.attackGroup}</div>
+                )}
+              </div>
+            </>
+          )}
+          {selectedNode.type === 'destination' && (
+            <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
+              <div><strong>Attacks Received:</strong> {selectedNode.attacksReceived}</div>
+            </div>
+          )}
         </div>
-      )}
-      
+      </div>
+    )}
+    
     <canvas
       ref={canvasRef}
       width={window.innerWidth}

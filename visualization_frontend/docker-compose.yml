@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  visualization-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cybersec-viz-frontend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    networks:
+      - cybersec-network
+
+networks:
+  cybersec-network:
+    driver: bridge

@@ -43,6 +43,8 @@ const UNSWVisualization = () => {
   const [error, setError] = useState(null);
   const [showConfig, setShowConfig] = useState(true);
   const [availableFeatures, setAvailableFeatures] = useState([]);
+  const [featureMetrics, setFeatureMetrics] = useState({});
+  const [metricsLoaded, setMetricsLoaded] = useState(false);
   
   // State for config
   const [config, setConfig] = useState({
@@ -82,6 +84,53 @@ const UNSWVisualization = () => {
     'byte_ratio', 'total_loss', 'loss_rate', 'avg_jitter', 'window_size_avg',
     'tcp_handshake_time', 'response_body_len'
   ];
+  const getFeatureMetric = (featureName) => {
+    return featureMetrics[featureName] || { 
+      usefulness_score: 0, 
+      interpretability: 0, 
+      combined_score: 0, 
+      feature_group: 'Unknown' 
+    };
+  };
+  useEffect(() => {
+  const loadFeatureMetrics = async () => {
+    try {
+      const response = await fetch('/feature_metrics_unsw.csv');
+      if (!response.ok) throw new Error('Could not load feature metrics');
+      const csvText = await response.text();
+      
+      const lines = csvText.split('\n');
+      const headers = lines[0].split(',').map(h => h.trim());
+      
+      const metrics = {};
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const values = lines[i].split(',');
+        if (values.length < headers.length) continue;
+        
+        const featureName = values[0].trim();
+        metrics[featureName] = {
+          importance: parseFloat(values[headers.indexOf('importance')]) || 0,
+          mutual_info: parseFloat(values[headers.indexOf('mutual_info')]) || 0,
+          correlation: parseFloat(values[headers.indexOf('correlation')]) || 0,
+          cohens_d: parseFloat(values[headers.indexOf('cohens_d')]) || 0,
+          interpretability: parseFloat(values[headers.indexOf('interpretability')]) || 0,
+          usefulness_score: parseFloat(values[headers.indexOf('usefulness_score')]) || 0,
+          combined_score: parseFloat(values[headers.indexOf('combined_score')]) || 0,
+          feature_group: values[headers.indexOf('feature_group')]?.trim() || 'Unknown'
+        };
+      }
+      
+      setFeatureMetrics(metrics);
+      setMetricsLoaded(true);
+    } catch (err) {
+      console.warn('Feature metrics not loaded:', err);
+      setMetricsLoaded(false);
+    }
+  };
+  
+  loadFeatureMetrics();
+}, []);
 
   const loadAndProcessData = async () => {
     try {
@@ -466,6 +515,7 @@ const UNSWVisualization = () => {
     setTransform({ x: 0, y: 0, scale: 1 });
   };
 
+
 return (
   <div style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0, fontFamily: 'system-ui, sans-serif', background: '#0f172a' }}>
     
@@ -547,11 +597,31 @@ return (
               onChange={(e) => setConfig({...config, nodeSizeFeature: e.target.value})}
               style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
             >
-              {numericFeatures.map(f => (
-                <option key={f} value={f}>{f}</option>
-              ))}
+              {numericFeatures.map(f => {
+                const metric = getFeatureMetric(f);
+                return (
+                  <option key={f} value={f}>
+                    {f} {metricsLoaded && metric.combined_score > 0 ? `(${metric.combined_score.toFixed(2)})` : ''}
+                  </option>
+                );
+              })}
             </select>
             <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = larger nodes</div>
+            {metricsLoaded && (
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px', padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '4px' }}>
+                {(() => {
+                  const metric = getFeatureMetric(config.nodeSizeFeature);
+                  return (
+                    <>
+                      <div><strong>Quality Score:</strong> {metric.combined_score.toFixed(3)}</div>
+                      <div><strong>Interpretability:</strong> {metric.interpretability.toFixed(2)}</div>
+                      <div><strong>Usefulness:</strong> {metric.usefulness_score.toFixed(2)}</div>
+                      <div><strong>Group:</strong> {metric.feature_group}</div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: '20px' }}>
@@ -561,11 +631,29 @@ return (
               onChange={(e) => setConfig({...config, edgeThicknessFeature: e.target.value})}
               style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
             >
-              {numericFeatures.map(f => (
-                <option key={f} value={f}>{f}</option>
-              ))}
+              {numericFeatures.map(f => {
+                const metric = getFeatureMetric(f);
+                return (
+                  <option key={f} value={f}>
+                    {f} {metricsLoaded && metric.combined_score > 0 ? `(${metric.combined_score.toFixed(2)})` : ''}
+                  </option>
+                );
+              })}
             </select>
             <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = thicker edges</div>
+            {metricsLoaded && (
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px', padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '4px' }}>
+                {(() => {
+                  const metric = getFeatureMetric(config.edgeThicknessFeature);
+                  return (
+                    <>
+                      <div><strong>Quality Score:</strong> {metric.combined_score.toFixed(3)}</div>
+                      <div><strong>Interpretability:</strong> {metric.interpretability.toFixed(2)}</div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: '20px' }}>
@@ -575,117 +663,32 @@ return (
               onChange={(e) => setConfig({...config, edgeOpacityFeature: e.target.value})}
               style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
             >
-              {numericFeatures.map(f => (
-                <option key={f} value={f}>{f}</option>
-              ))}
+              {numericFeatures.map(f => {
+                const metric = getFeatureMetric(f);
+                return (
+                  <option key={f} value={f}>
+                    {f} {metricsLoaded && metric.combined_score > 0 ? `(${metric.combined_score.toFixed(2)})` : ''}
+                  </option>
+                );
+              })}
             </select>
             <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = more opaque edges</div>
+            {metricsLoaded && (
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px', padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '4px' }}>
+                {(() => {
+                  const metric = getFeatureMetric(config.edgeOpacityFeature);
+                  return (
+                    <>
+                      <div><strong>Quality Score:</strong> {metric.combined_score.toFixed(3)}</div>
+                      <div><strong>Interpretability:</strong> {metric.interpretability.toFixed(2)}</div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         </div>
 
-        <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
-          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Filters</h3>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Packets:</label>
-              <input 
-                type="number" 
-                value={config.filterMinPackets}
-                onChange={(e) => setConfig({...config, filterMinPackets: parseInt(e.target.value) || 0})}
-                min="0"
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Min Bytes:</label>
-              <input 
-                type="number" 
-                value={config.filterMinBytes}
-                onChange={(e) => setConfig({...config, filterMinBytes: parseInt(e.target.value) || 0})}
-                min="0"
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-              />
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-              <input 
-                type="checkbox"
-                checked={config.showOnlyAttacks}
-                onChange={(e) => setConfig({...config, showOnlyAttacks: e.target.checked})}
-                style={{ marginRight: '8px' }}
-              />
-              <span style={{ fontSize: '14px' }}>Show only attack traffic</span>
-            </label>
-          </div>
-        </div>
-
-        <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '15px', borderRadius: '8px', marginBottom: '25px', fontSize: '13px', lineHeight: '1.6' }}>
-          <div style={{ fontWeight: '500', marginBottom: '8px' }}>Configuration Summary:</div>
-          <div>- Processing <strong>{config.maxRows.toLocaleString()}</strong> network flows</div>
-          <div>- Creating <strong>{(config.numSourceNodes + config.numDestNodes).toLocaleString()}</strong> total nodes</div>
-          <div>- Using <strong>{config.groupingStrategy}</strong> grouping strategy</div>
-          <select 
-            value={config.groupingStrategy}
-            onChange={(e) => setConfig({...config, groupingStrategy: e.target.value})}
-            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-          >
-            <option value="modulo">Modulo (Even distribution)</option>
-            <option value="sequential">Sequential (Time-based grouping)</option>
-            <option value="service">Service-based (Group by service type)</option>
-          </select>
-        </div>
-
-        {/* Feature Selection */}
-        <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
-          <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Feature Mapping</h3>
-          
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Node Size Feature:</label>
-            <select 
-              value={config.nodeSizeFeature}
-              onChange={(e) => setConfig({...config, nodeSizeFeature: e.target.value})}
-              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-            >
-              {numericFeatures.map(f => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </select>
-            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = larger nodes</div>
-          </div>
-
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Thickness Feature:</label>
-            <select 
-              value={config.edgeThicknessFeature}
-              onChange={(e) => setConfig({...config, edgeThicknessFeature: e.target.value})}
-              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-            >
-              {numericFeatures.map(f => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </select>
-            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = thicker edges</div>
-          </div>
-
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500' }}>Edge Opacity Feature:</label>
-            <select 
-              value={config.edgeOpacityFeature}
-              onChange={(e) => setConfig({...config, edgeOpacityFeature: e.target.value})}
-              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #475569', background: '#1e293b', color: 'white', fontSize: '14px' }}
-            >
-              {numericFeatures.map(f => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </select>
-            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '5px' }}>Larger values = more opaque edges</div>
-          </div>
-        </div>
-
-        {/* Filters */}
         <div style={{ borderTop: '1px solid #475569', paddingTop: '25px', marginTop: '25px' }}>
           <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#3b82f6' }}>Filters</h3>
           
@@ -764,9 +767,14 @@ return (
 
         <div style={{ background: 'rgba(168, 85, 247, 0.1)', padding: '10px', borderRadius: '6px', marginBottom: '15px', fontSize: '12px' }}>
           <div style={{ fontWeight: '500', marginBottom: '5px' }}>Visual Features:</div>
-          <div>- Size: {config.nodeSizeFeature}</div>
-          <div>- Edge width: {config.edgeThicknessFeature}</div>
-          <div>- Edge opacity: {config.edgeOpacityFeature}</div>
+          <div>• Size: {config.nodeSizeFeature}</div>
+          <div>• Edge width: {config.edgeThicknessFeature}</div>
+          <div>• Edge opacity: {config.edgeOpacityFeature}</div>
+          {metricsLoaded && (
+            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.1)', fontSize: '11px' }}>
+              <div>Quality: {getFeatureMetric(config.nodeSizeFeature).combined_score.toFixed(2)}</div>
+            </div>
+          )}
         </div>
         
         <div style={{ marginBottom: '15px' }}>
@@ -913,7 +921,17 @@ return (
           
           <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
             <div style={{ fontWeight: '500', marginBottom: '8px' }}>Selected Features:</div>
-            <div><strong>{config.nodeSizeFeature}:</strong> {selectedNode.features[config.nodeSizeFeature]?.toFixed(2) || 0}</div>
+            <div>
+              <strong>{config.nodeSizeFeature}:</strong> {selectedNode.features[config.nodeSizeFeature]?.toFixed(2) || 0}
+              {metricsLoaded && (() => {
+                const metric = getFeatureMetric(config.nodeSizeFeature);
+                return (
+                  <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>
+                    Quality: {metric.combined_score.toFixed(2)} | Interp: {metric.interpretability.toFixed(2)}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
           
           <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #444' }}>
@@ -947,19 +965,18 @@ return (
         </div>
       </div>
     )}
-    
-    <canvas
-      ref={canvasRef}
-      width={window.innerWidth}
-      height={window.innerHeight}
-      onClick={handleCanvasClick}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onWheel={handleWheel}
-      style={{ cursor: isDragging ? 'grabbing' : 'grab', display: showConfig ? 'none' : 'block' }}
-    />
-  </div>
-)};
-export default UNSWVisualization
+      <canvas
+  ref={canvasRef}
+  width={window.innerWidth}
+  height={window.innerHeight}
+  onClick={handleCanvasClick}
+  onMouseDown={handleMouseDown}
+  onMouseMove={handleMouseMove}
+  onMouseUp={handleMouseUp}
+  onMouseLeave={handleMouseUp}
+  onWheel={handleWheel}
+  style={{ cursor: isDragging ? 'grabbing' : 'grab', display: showConfig ? 'none' : 'block' }}
+/>
+  </div>)};
+
+export default UNSWVisualization;
